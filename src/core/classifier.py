@@ -18,22 +18,40 @@ class CandidateClassifier:
         self.config = config
         self.ai_client = ai_client
 
-    def classify(self, *, title: str, url: str, filename: str = "", page_text: str = "") -> Candidate:
-        text = " ".join([title, filename, url, page_text[:1000]]).lower()
+    def classify(
+        self,
+        *,
+        title: str,
+        url: str,
+        filename: str = "",
+        page_text: str = "",
+        pre_score: int = 0,
+        pre_reasons: list[str] | None = None,
+    ) -> Candidate:
+        pre_reasons = pre_reasons or []
+        text = " ".join([title, filename, url, page_text[:1000], " ".join(pre_reasons)]).lower()
         brand = next((b.title() for b in BRANDS if b in text), "")
         keyword_hits = [k for k in KEYWORDS if k in text]
         ext = self._extension(filename or url)
 
-        confidence = min(0.85, 0.18 + len(keyword_hits) * 0.13 + (0.25 if brand else 0) + (0.15 if ext else 0))
-        is_candidate = bool(keyword_hits or brand or ext)
-        reason = "Rule-based match: " + ", ".join([*keyword_hits, brand, ext]).strip(", ")
+        rule_confidence = min(0.95, max(0.05, pre_score / 24)) if pre_score else 0.0
+        semantic_confidence = min(0.85, 0.10 + len(keyword_hits) * 0.10 + (0.25 if brand else 0) + (0.20 if ext else 0))
+        confidence = max(rule_confidence, semantic_confidence)
+        reason_bits = [*pre_reasons, *keyword_hits]
+        if brand:
+            reason_bits.append(f"brand:{brand}")
+        if ext:
+            reason_bits.append(f"extension:{ext}")
+        reason_bits = list(dict.fromkeys([x for x in reason_bits if x]))
+        reason = "Focused match: " + ", ".join(reason_bits) if reason_bits else "Focused match from source URL."
         risk_note = "Manual review required before archiving."
-        kind = "implant_library" if ("implant" in keyword_hits or brand) else "dental_library"
+        kind = "implant_library" if ("implant" in text or brand) else "dental_library"
 
-        if self.config.ai.enabled and self.ai_client:
+        # AI is intentionally called only after deterministic filtering. It should enrich the decision,
+        # not wander through unrelated links or auto-approve uploads.
+        if self.config.ai.enabled and self.ai_client and (pre_score >= 7 or ext or brand):
             ai = self.ai_client.classify_candidate(title=title, url=url, filename=filename, page_text=page_text)
             if ai.reason or ai.confidence > 0:
-                is_candidate = ai.is_candidate or is_candidate
                 confidence = max(confidence, ai.confidence)
                 brand = ai.detected_brand or brand
                 kind = ai.detected_kind or kind
