@@ -21,16 +21,16 @@ Use it only for resources that are public and allowed to be redistributed or arc
 
 Dental Librarian can use a local Ollama model to classify candidate files and produce short decision summaries.
 
-Install Ollama, then pull a model:
+Install Ollama, then pull the default model:
 
 ```bash
-ollama pull qwen2.5:7b
+ollama pull qwen3:14b
 ```
 
 Test it:
 
 ```bash
-ollama run qwen2.5:7b
+ollama run qwen3:14b
 ```
 
 The default config uses:
@@ -39,10 +39,23 @@ The default config uses:
 ai:
   provider: ollama
   base_url: http://localhost:11434
-  model: qwen2.5:7b
+  model: qwen3:14b
 ```
 
 The app calls Ollama through the local HTTP API and expects JSON classification output. It does not display hidden chain-of-thought; it only shows action logs and short decision summaries.
+
+## Focused scanning
+
+The crawler does not send every random link to AI.
+
+It first scores links with deterministic rules:
+
+- implant / exocad / cadcam / library terms
+- implant brand names such as Osstem, Straumann, Nobel, MegaGen, Neodent
+- allowed file extensions such as `.zip`, `.7z`, `.stl`, `.xml`, `.dme`
+- negative filters such as login, privacy, contact, checkout, social links, images, CSS and JS
+
+Only focused links are queued or passed to the AI classifier.
 
 ## Setup
 
@@ -103,8 +116,10 @@ Current MVP includes:
 - PySide6 desktop UI
 - Live action log panel
 - Ollama local AI classifier client
-- Public website candidate scanner
+- Focused public website candidate scanner
+- Deterministic link scoring before AI
 - Public Google Drive folder handler via `gdown`
+- Direct public file downloader
 - ZIP packer with manifest and SHA256 checksums
 - Internet Archive uploader module
 - `archive_candidates.json` and `archive.json` writers
