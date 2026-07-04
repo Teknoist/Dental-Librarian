@@ -1,0 +1,41 @@
+app:
+  name: Dental Librarian
+  dry_run: true
+  require_manual_approval: true
+  max_pages_per_source: 25
+  request_timeout_seconds: 25
+  polite_delay_seconds: 1.0
+
+ai:
+  provider: ollama
+  base_url: http://localhost:11434
+  model: qwen2.5:7b
+  temperature: 0
+  enabled: true
+
+archive:
+  allowed_extensions:
+    - .zip
+    - .7z
+    - .rar
+    - .stl
+    - .obj
+    - .ply
+    - .xml
+    - .dme
+    - .library
+    - .implant
+  output_dir: archives
+  download_dir: downloads
+  data_dir: data
+
+internet_archive:
+  enabled: false
+  collection: opensource
+  creator: Community Archive
+  mediatype: software
+  subject:
+    - dental
+    - cadcam
+    - implant
+    - library
