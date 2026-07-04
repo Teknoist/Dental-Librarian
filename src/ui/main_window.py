@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable
 
 from PySide6.QtCore import QObject, QThread, Signal, Qt
 from PySide6.QtGui import QColor
@@ -28,11 +27,12 @@ from src.ai.local_ai_client import LocalAIClient
 from src.core.classifier import CandidateClassifier
 from src.core.config import Config
 from src.core.crawler import PublicCrawler
+from src.core.downloader import DirectDownloader
 from src.core.drive_handler import GoogleDriveHandler
+from src.core.ia_uploader import InternetArchiveUploader
 from src.core.models import Candidate
 from src.core.packer import ArchivePacker
 from src.core.storage import ensure_data_files, load_archive, load_candidates, save_archive, save_candidates
-from src.core.ia_uploader import InternetArchiveUploader
 
 
 class ScanWorker(QObject):
@@ -92,7 +92,7 @@ class MainWindow(QMainWindow):
 
         top = QHBoxLayout()
         self.url_input = QLineEdit()
-        self.url_input.setPlaceholderText("Website or public Google Drive folder URL")
+        self.url_input.setPlaceholderText("Website, public file URL, or public Google Drive folder URL")
         self.scan_btn = QPushButton("Scan")
         self.ai_btn = QPushButton("Test Local AI")
         self.approve_btn = QPushButton("Approve Selected")
@@ -119,12 +119,9 @@ class MainWindow(QMainWindow):
         self.table.setHorizontalHeaderLabels(["Status", "Name", "Brand", "Kind", "Confidence", "Source", "Reason", "Risk"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        for idx in [0, 2, 3, 4, 5]:
+            self.table.horizontalHeader().setSectionResizeMode(idx, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(7, QHeaderView.Stretch)
         splitter.addWidget(self.table)
@@ -162,6 +159,7 @@ class MainWindow(QMainWindow):
     def log(self, level: str, message: str) -> None:
         color = {"INFO": "#9ee8c9", "WARN": "#ffd166", "ERROR": "#ff6b8a", "AI": "#9bb5ff"}.get(level, "#f5f7ff")
         self.log_box.append(f'<span style="color:{color};font-weight:700">[{level}]</span> {message}')
+        QApplication.processEvents()
 
     def refresh_table(self) -> None:
         self.table.setRowCount(len(self.candidates))
@@ -193,7 +191,7 @@ class MainWindow(QMainWindow):
     def start_scan(self) -> None:
         url = self.url_input.text().strip()
         if not url:
-            QMessageBox.warning(self, "Missing URL", "Add a website or public Google Drive folder URL first.")
+            QMessageBox.warning(self, "Missing URL", "Add a website, public file URL, or public Google Drive folder URL first.")
             return
         self.scan_btn.setEnabled(False)
         self.log("INFO", f"Scan started: {url}")
@@ -241,21 +239,30 @@ class MainWindow(QMainWindow):
         if not rows:
             return
         drive = GoogleDriveHandler(self.download_dir, self.config.archive.allowed_extensions, log=self.log)
+        direct = DirectDownloader(self.download_dir, self.config.archive.allowed_extensions, log=self.log)
         packer = ArchivePacker(self.archive_dir, self.config.archive.allowed_extensions, log=self.log)
         for r in rows:
             c = self.candidates[r]
             if self.config.app.require_manual_approval and not c.approved:
                 self.log("WARN", f"Not approved, skipped: {c.name}")
                 continue
-            if c.source_type == "google_drive" and drive.is_drive_folder(c.source_url):
-                folder = drive.download_public_folder(c.source_url, title=c.name or "drive-folder")
+            try:
+                if c.source_type == "google_drive" and drive.is_drive_folder(c.source_url):
+                    folder = drive.download_public_folder(c.source_url, title=c.name or "drive-folder")
+                elif direct.is_allowed_url(c.source_url):
+                    folder = direct.download_file(c.source_url, title=c.name or "direct-file")
+                else:
+                    self.log("WARN", f"Unsupported package source, skipped: {c.source_url}")
+                    continue
+
                 zip_path = packer.package_folder(folder, title=c.name or "Dental Library", source_url=c.source_url, source_type=c.source_type)
                 c.local_path = str(folder)
                 c.archive_path = str(zip_path)
                 c.status = "packaged"
                 self.log("INFO", f"Packaged: {zip_path}")
-            else:
-                self.log("WARN", f"Direct file download is not implemented for this source yet: {c.source_url}")
+            except Exception as exc:
+                c.status = "error"
+                self.log("ERROR", f"Packaging failed for {c.name}: {exc}")
         self.save_candidates()
 
     def upload_selected(self) -> None:
@@ -275,10 +282,14 @@ class MainWindow(QMainWindow):
             if not c.archive_path:
                 self.log("WARN", f"No ZIP package yet: {c.name}")
                 continue
-            record = uploader.upload(zip_path=Path(c.archive_path), title=c.name, source_url=c.source_url, source_type=c.source_type)
-            c.ia_identifier = record.identifier
-            c.status = "uploaded"
-            records.append(record)
+            try:
+                record = uploader.upload(zip_path=Path(c.archive_path), title=c.name, source_url=c.source_url, source_type=c.source_type)
+                c.ia_identifier = record.identifier
+                c.status = "uploaded"
+                records.append(record)
+            except Exception as exc:
+                c.status = "error"
+                self.log("ERROR", f"Upload failed for {c.name}: {exc}")
         save_archive(self.archive_path, records)
         self.save_candidates()
 
